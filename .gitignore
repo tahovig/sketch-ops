@@ -1,4 +1,4 @@
+# .gitignore
 /target
-/results/*.csv
-/results/*.json
-/charts/*.png
+/results
+/charts

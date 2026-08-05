@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sketches",
+    "crates/workload",
+    "crates/bench",
+]
+
+[profile.release]
+lto = true
+codegen-units = 1
