@@ -121,9 +121,28 @@ mod tests {
 
     #[test]
     fn memory_bytes_reserves_heap_budget_before_sizing_counters() {
-        let tiny = CountMinSketch::new_with_budget(64, 50, 1);
+        // With budget=64, k=50: heap_bytes = 50*16 = 800 > 64,
+        // so remaining clamps to 0, width clamps to minimum (CMS_DEPTH cells = 1),
+        // giving exact predictable memory_bytes.
+        // If width were incorrectly sized from full budget instead of remaining,
+        // this test would fail.
+        let budget = 64;
+        let k = 50;
+        let tiny = CountMinSketch::new_with_budget(budget, k, 1);
+
+        // Calculate expected value derived from constants, not hardcoded:
+        let heap_bytes = k * std::mem::size_of::<HeapEntry>();
+        let remaining = budget.saturating_sub(heap_bytes);
+        let cell_bytes = std::mem::size_of::<u32>();
+        let total_cells = (remaining / cell_bytes).max(CMS_DEPTH);
+        let width = (total_cells / CMS_DEPTH).max(1);
+        let expected_memory = heap_bytes + CMS_DEPTH * width * cell_bytes;
+
+        assert_eq!(tiny.memory_bytes(), expected_memory,
+            "with heap-budget exhausted, memory should match tight calculation");
+
+        // Also verify generous budget allocates more memory
         let generous = CountMinSketch::new_with_budget(1_000_000, 50, 1);
-        assert!(tiny.memory_bytes() <= 64 + 4096, "tiny budget should stay small");
         assert!(generous.memory_bytes() > tiny.memory_bytes());
     }
 }
