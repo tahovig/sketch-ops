@@ -3,4 +3,5 @@ pub mod count_min;
 pub mod exact;
 pub mod hash;
 pub mod indexed_heap;
+pub mod space_saving;
 pub mod traits;
