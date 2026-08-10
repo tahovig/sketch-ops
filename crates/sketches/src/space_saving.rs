@@ -7,7 +7,6 @@ const SPACE_SAVING_BYTES_PER_ENTRY: usize = 32;
 
 pub struct SpaceSaving {
     m: usize,
-    k: usize,
     heap: IndexedMinHeap,
     errors: HashMap<u64, u64>,
     memory_bytes: usize,
@@ -21,7 +20,6 @@ impl SpaceSaving {
         let actual_memory = heap_bytes + m * SPACE_SAVING_BYTES_PER_ENTRY;
         Self {
             m,
-            k,
             heap: IndexedMinHeap::new(),
             errors: HashMap::new(),
             memory_bytes: actual_memory,
