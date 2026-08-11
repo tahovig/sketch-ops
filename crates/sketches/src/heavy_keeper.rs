@@ -209,4 +209,77 @@ mod tests {
         hk.insert(item_a);
         hk.insert(item_b);
     }
+
+    #[test]
+    fn eviction_overwrites_cell_with_new_item() {
+        // Single cell ensures every different item targets the same slot.
+        // Insert item_a to populate the cell, then keep inserting item_b
+        // until decay probabilistically evicts item_a (count reaches 0).
+        let seed = 123u64;
+        let mut hk = HeavyKeeper::with_dimensions(1, 1, 5, seed);
+        let item_a = 1000u64;
+        let item_b = 2000u64;
+
+        // Insert item_a once: cell has (fp_a, count=1)
+        hk.insert(item_a);
+        assert_eq!(hk.query(item_a), 1, "item_a should have count 1 after first insert");
+
+        // Insert item_b repeatedly until decay evicts item_a.
+        // With decay_base=1.08 and count=1, decay_survives(1) checks
+        // if next_f64() < 1.08^(-1) ≈ 0.9259, so ~92.6% chance per insert.
+        let mut eviction_happened = false;
+        for _ in 0..100 {
+            hk.insert(item_b);
+            if hk.query(item_a) == 0 && hk.query(item_b) > 0 {
+                eviction_happened = true;
+                break;
+            }
+        }
+
+        assert!(
+            eviction_happened,
+            "decay should have evicted item_a within 100 attempts for seed=123"
+        );
+        assert_eq!(
+            hk.query(item_a), 0,
+            "evicted item's query should return 0 (fingerprint mismatch)"
+        );
+        assert!(
+            hk.query(item_b) > 0,
+            "new item should now occupy the cell with count > 0"
+        );
+    }
+
+    #[test]
+    fn memory_bytes_reserves_heap_budget_before_sizing_cells() {
+        // With budget=96, k=6: heap_bytes = 6*16 = 96,
+        // so remaining clamps to 0, width clamps to minimum (HK_DEPTH cells = 1),
+        // giving exact predictable memory_bytes.
+        // If width were incorrectly sized from full budget instead of remaining,
+        // this test would fail.
+        let budget = 96;
+        let k = 6;
+        let tiny = HeavyKeeper::new(budget, k, 1);
+
+        // Calculate expected value derived from constants, not hardcoded:
+        let heap_bytes = k * std::mem::size_of::<HeapEntry>();
+        let remaining = budget.saturating_sub(heap_bytes);
+        let cell_bytes = std::mem::size_of::<Cell>();
+        let total_cells = (remaining / cell_bytes).max(HK_DEPTH);
+        let width = (total_cells / HK_DEPTH).max(1);
+        let expected_memory = heap_bytes + HK_DEPTH * width * cell_bytes;
+
+        assert_eq!(
+            tiny.memory_bytes(),
+            expected_memory,
+            "with heap-budget exhausted, memory should match tight calculation"
+        );
+
+        // Also verify generous budget allocates more memory
+        let generous = HeavyKeeper::new(1_000_000, 6, 1);
+        assert!(
+            generous.memory_bytes() > tiny.memory_bytes(),
+            "generous budget should yield more memory than tiny budget"
+        );
+    }
 }
