@@ -11,6 +11,22 @@ fn main() {
     let cli = Cli::parse();
     match cli.command {
         Command::Sweep(args) => {
+            if !(0.0..1.0).contains(&args.warmup_fraction) {
+                eprintln!(
+                    "error: --warmup-fraction must be in [0.0, 1.0), got {}",
+                    args.warmup_fraction
+                );
+                std::process::exit(1);
+            }
+
+            if args.format != "csv" && args.format != "json" {
+                eprintln!(
+                    "error: --format must be one of \"csv\" or \"json\", got \"{}\"",
+                    args.format
+                );
+                std::process::exit(1);
+            }
+
             let results = sweep::run_sweep(&args);
 
             let output_path = std::path::Path::new(&args.output);
@@ -21,8 +37,9 @@ fn main() {
             }
 
             match args.format.as_str() {
+                "csv" => report::write_csv(output_path, &results).expect("failed to write CSV output"),
                 "json" => report::write_json(output_path, &results).expect("failed to write JSON output"),
-                _ => report::write_csv(output_path, &results).expect("failed to write CSV output"),
+                _ => unreachable!("format validated above"),
             }
 
             println!("wrote {} rows to {}", results.len(), args.output);

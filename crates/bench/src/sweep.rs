@@ -73,6 +73,11 @@ struct RunContext<'a> {
     skew: f64,
     ground_truth: &'a GroundTruth,
     true_items: &'a [u64],
+    /// Number of leading stream items skipped as warmup, computed once per
+    /// (cardinality, skew) sweep iteration and reused for both the insert-loop
+    /// split (see `run_one`) and the `items_per_sec` calculation below, so the
+    /// two never drift apart.
+    warmup_len: usize,
 }
 
 fn build_row<S: HeavyHitterSketch>(
@@ -99,8 +104,7 @@ fn build_row<S: HeavyHitterSketch>(
         .collect();
     let error_stats = relative_error_stats(&true_counts, |item| sketch.query(item));
 
-    let warmup_items = ((ctx.args.stream_length as f64) * ctx.args.warmup_fraction) as u64;
-    let measured_items = ctx.args.stream_length.saturating_sub(warmup_items);
+    let measured_items = ctx.args.stream_length.saturating_sub(ctx.warmup_len as u64);
     let items_per_sec = if insert_elapsed_ns == 0 {
         0.0
     } else {
@@ -155,14 +159,16 @@ pub fn run_sweep(args: &SweepArgs) -> Vec<SweepResult> {
             let true_top_k = ground_truth.top_k(args.top_k);
             let true_items: Vec<u64> = true_top_k.iter().map(|&(item, _)| item).collect();
 
+            let warmup_len = ((args.stream_length as f64) * args.warmup_fraction) as usize;
+
             let ctx = RunContext {
                 args,
                 cardinality,
                 skew,
                 ground_truth: &ground_truth,
                 true_items: &true_items,
+                warmup_len,
             };
-            let warmup_len = ((args.stream_length as f64) * args.warmup_fraction) as usize;
 
             for &budget in &args.memory_budgets {
                 for algorithm in Algorithm::all() {
@@ -232,6 +238,29 @@ mod tests {
             assert!((0.0..=1.0).contains(&row.f1_at_k));
             assert!(row.mean_relative_error >= 0.0);
             assert!(row.max_relative_error >= row.mean_relative_error - 1e-9);
+        }
+
+        // Oracle assertion: at budget 16384 with top_k 10, Space-Saving's
+        // monitored-entry count m works out to 507, which exceeds the
+        // stream's cardinality of 200. That means Space-Saving can track
+        // every distinct key with room to spare and must be exact. If
+        // run_sweep were ever rewired so ground truth came from a
+        // differently-seeded stream than what the sketches actually
+        // consume, this assertion would catch it immediately, whereas the
+        // range-only checks above would not.
+        let exact_space_saving_rows: Vec<_> = results
+            .iter()
+            .filter(|row| row.algorithm == "space_saving" && row.requested_memory_bytes == 16384)
+            .collect();
+        assert!(
+            !exact_space_saving_rows.is_empty(),
+            "expected space_saving rows at requested_memory_bytes == 16384"
+        );
+        for row in exact_space_saving_rows {
+            assert_eq!(row.mean_relative_error, 0.0, "expected exact tracking: {row:?}");
+            assert_eq!(row.f1_at_k, 1.0, "expected perfect top-k recovery: {row:?}");
+            assert_eq!(row.underestimate_count, 0, "expected no underestimates: {row:?}");
+            assert_eq!(row.overestimate_count, 0, "expected no overestimates: {row:?}");
         }
     }
 }

@@ -31,9 +31,7 @@ pub struct SweepResult {
 pub fn write_csv(path: &Path, rows: &[SweepResult]) -> io::Result<()> {
     let mut writer = csv::Writer::from_path(path)?;
     for row in rows {
-        writer
-            .serialize(row)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        writer.serialize(row).map_err(io::Error::other)?;
     }
     writer.flush()?;
     Ok(())
@@ -41,7 +39,7 @@ pub fn write_csv(path: &Path, rows: &[SweepResult]) -> io::Result<()> {
 
 pub fn write_json(path: &Path, rows: &[SweepResult]) -> io::Result<()> {
     let file = std::fs::File::create(path)?;
-    serde_json::to_writer_pretty(file, rows).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    serde_json::to_writer_pretty(file, rows).map_err(io::Error::other)?;
     Ok(())
 }
 

@@ -14,16 +14,16 @@ pub enum Command {
 
 #[derive(Args, Debug, Clone)]
 pub struct SweepArgs {
-    #[arg(long, value_delimiter = ',')]
+    #[arg(long, value_delimiter = ',', required = true)]
     pub cardinality: Vec<u64>,
 
     #[arg(long)]
     pub stream_length: u64,
 
-    #[arg(long, value_delimiter = ',')]
+    #[arg(long, value_delimiter = ',', required = true)]
     pub skew: Vec<f64>,
 
-    #[arg(long, value_delimiter = ',')]
+    #[arg(long, value_delimiter = ',', required = true)]
     pub memory_budgets: Vec<usize>,
 
     #[arg(long, default_value_t = 20)]
@@ -79,5 +79,21 @@ mod tests {
         assert_eq!(args.output, "results/test.csv");
         assert_eq!(args.warmup_fraction, 0.05);
         assert_eq!(args.format, "csv");
+    }
+
+    #[test]
+    fn missing_required_list_args_fail_to_parse() {
+        // --cardinality is required; omitting it must be a parse error, not an
+        // empty Vec that silently produces a zero-row sweep.
+        let result = Cli::try_parse_from([
+            "bench",
+            "sweep",
+            "--stream-length", "50000",
+            "--skew", "0.8,1.2",
+            "--memory-budgets", "4096,65536",
+            "--output", "results/test.csv",
+        ]);
+
+        assert!(result.is_err(), "expected parse error when --cardinality is omitted");
     }
 }
