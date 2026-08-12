@@ -2,13 +2,35 @@
 """Read a sweep-results CSV and render accuracy/throughput/skew-sensitivity charts."""
 import argparse
 import os
+import sys
 
 import pandas as pd
 import matplotlib.pyplot as plt
 
 
+REQUIRED_COLUMNS = {
+    "run_id", "algorithm", "trial", "seed", "cardinality", "skew",
+    "stream_length", "top_k_target", "warmup_fraction", "requested_memory_bytes",
+    "actual_memory_bytes", "construction_time_ns", "insert_elapsed_ns",
+    "items_per_sec", "precision_at_k", "recall_at_k", "f1_at_k",
+    "mean_relative_error", "max_relative_error", "underestimate_count",
+    "overestimate_count"
+}
+
+
 def load_results(csv_path: str) -> pd.DataFrame:
-    return pd.read_csv(csv_path)
+    if not os.path.exists(csv_path):
+        sys.exit(f"error: CSV file not found: {csv_path}")
+    try:
+        return pd.read_csv(csv_path)
+    except Exception as e:
+        sys.exit(f"error: failed to read CSV file {csv_path}: {e}")
+
+
+def validate_columns(df: pd.DataFrame, csv_path: str) -> None:
+    missing = REQUIRED_COLUMNS - set(df.columns)
+    if missing:
+        sys.exit(f"error: CSV file {csv_path} is missing columns: {sorted(missing)}")
 
 
 def plot_accuracy_vs_memory(df: pd.DataFrame, out_dir: str) -> None:
@@ -66,6 +88,7 @@ def main() -> None:
 
     os.makedirs(args.out, exist_ok=True)
     df = load_results(args.csv_path)
+    validate_columns(df, args.csv_path)
 
     plot_accuracy_vs_memory(df, args.out)
     plot_throughput_vs_memory(df, args.out)
