@@ -7,8 +7,12 @@ Space-Saving, and HeavyKeeper behind a common trait, benchmarked over
 synthetic Zipfian streams to characterize memory/accuracy/throughput
 tradeoffs. See `docs/superpowers/specs/` for the design doc.
 
-Phase 2 (future): use Phase 1's benchmark harness to validate a novel
-heavy-hitter sketch improvement against these baselines.
+Phase 2 (complete): PeelSketch, a novel heavy-hitter sketch, was implemented
+and validated against Phase 1's baselines using the same benchmark harness.
+The result was a genuine negative — PeelSketch did not beat HeavyKeeper
+anywhere in the swept skew/budget grid. See
+`docs/superpowers/specs/2026-08-16-peelsketch-phase2-results.md` for the
+full comparison and failure-mode analysis.
 
 ## Usage
 
@@ -27,9 +31,9 @@ cargo run --release --bin bench -- sweep \
 ```
 
 `--cardinality`, `--skew`, and `--memory-budgets` accept comma-separated
-lists and are run as a full cross product against all three algorithms
-(Count-Min, Space-Saving, HeavyKeeper). `--format` may be `csv` (default) or
-`json`.
+lists and are run as a full cross product against all four algorithms
+(Count-Min, Space-Saving, HeavyKeeper, PeelSketch). `--format` may be `csv`
+(default) or `json`.
 
 **Always build with `--release` for real measurements.** Debug-mode timing
 numbers are not meaningful for cross-algorithm comparison — this is a global
