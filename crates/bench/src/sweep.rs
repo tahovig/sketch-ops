@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use sketches::count_min::CountMinSketch;
 use sketches::heavy_keeper::HeavyKeeper;
+use sketches::peel_sketch::PeelSketch;
 use sketches::space_saving::SpaceSaving;
 use sketches::traits::HeavyHitterSketch;
 use workload::ground_truth::GroundTruth;
@@ -16,11 +17,12 @@ pub enum Algorithm {
     CountMin,
     SpaceSaving,
     HeavyKeeper,
+    PeelSketch,
 }
 
 impl Algorithm {
-    pub fn all() -> [Algorithm; 3] {
-        [Algorithm::CountMin, Algorithm::SpaceSaving, Algorithm::HeavyKeeper]
+    pub fn all() -> [Algorithm; 4] {
+        [Algorithm::CountMin, Algorithm::SpaceSaving, Algorithm::HeavyKeeper, Algorithm::PeelSketch]
     }
 
     pub fn name(&self) -> &'static str {
@@ -28,6 +30,7 @@ impl Algorithm {
             Algorithm::CountMin => "count_min",
             Algorithm::SpaceSaving => "space_saving",
             Algorithm::HeavyKeeper => "heavy_keeper",
+            Algorithm::PeelSketch => "peel_sketch",
         }
     }
 }
@@ -191,6 +194,11 @@ pub fn run_sweep(args: &SweepArgs) -> Vec<SweepResult> {
                                     run_one::<HeavyKeeper>(&stream, warmup_len, budget, args.top_k, sk_seed);
                                 build_row(&ctx, algorithm, trial, sk_seed, budget, ctor_ns, insert_ns, &sketch)
                             }
+                            Algorithm::PeelSketch => {
+                                let (sketch, ctor_ns, insert_ns) =
+                                    run_one::<PeelSketch>(&stream, warmup_len, budget, args.top_k, sk_seed);
+                                build_row(&ctx, algorithm, trial, sk_seed, budget, ctor_ns, insert_ns, &sketch)
+                            }
                         };
                         results.push(row);
                     }
@@ -227,7 +235,7 @@ mod tests {
         let results = run_sweep(&args);
 
         let expected_rows =
-            args.cardinality.len() * args.skew.len() * args.memory_budgets.len() * 3 * args.trials as usize;
+            args.cardinality.len() * args.skew.len() * args.memory_budgets.len() * 4 * args.trials as usize;
         assert_eq!(results.len(), expected_rows);
 
         for row in &results {
