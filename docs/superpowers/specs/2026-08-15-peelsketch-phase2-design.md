@@ -158,41 +158,43 @@ feed current estimate into the existing update_top_k heap pattern
 
 ### Query / top-k
 
+> **Revision note:** an earlier version of this section estimated the
+> blocking candidate's count from *other rows* and subtracted that.
+> That mechanism turned out to be uncomputable without an auxiliary
+> structure: the blocking candidate is only ever observed as a fingerprint,
+> never a recovered item identity, so there is no way to compute which
+> *cell in another row* belongs to the same blocking item — doing so
+> requires hashing the item itself, which requires knowing it. The
+> corrected mechanism below is entirely local to the one cell being read,
+> needs no cross-row lookup, and is grounded directly in the Misra-Gries
+> guarantee rather than an ad hoc subtraction.
+
 ```
 fp = fingerprint_of(item)
 for each row r in 0..depth:
     cell = cells[r][hash_r(item)]
     if cell.candidate_fingerprint == fp {
-        row_estimate[r] = cell.raw_total      // item is (probably) the row's majority
+        row_estimate[r] = cell.raw_total          // item is (probably) the row's majority
     } else {
-        // Search only OTHER rows (r' != r) for a clean read on the blocking
-        // candidate — row r's own raw_total is exactly the contaminated
-        // value we're trying to refine, and including it here would let it
-        // trivially satisfy its own "candidate matches" test, making
-        // majority_estimate <= raw_total by construction and potentially
-        // zeroing out the residual we're trying to isolate.
-        majority_estimate = min over rows r' != r where cell'[r'].candidate_fingerprint
-                             == cell.candidate_fingerprint of cell'[r'].raw_total
-                             // 0 if no other row's candidate matches (this is
-                             // always the case when depth == 1 — the cascade
-                             // cannot refine anything with only one row)
-        row_estimate[r] = cell.raw_total.saturating_sub(majority_estimate)
+        row_estimate[r] = cell.raw_total.saturating_sub(cell.vote_margin)
+                                                    // upper bound on everything in this
+                                                    // cell that ISN'T the majority candidate
     }
 estimate = min over r of row_estimate[r]
 ```
 
-The cascade is deliberately bounded to **one level**: estimating a blocking
-candidate's count only from *other* rows where it is directly the local
-majority, never recursively chasing that candidate's own blockers. Full
-iterative peeling (resolve one item, subtract everywhere, repeat until
-nothing more resolves, falling back to solving a linear system when it
-stalls — Hidden Sketch's approach) is real additional complexity explicitly
-excluded as a non-goal. If no other row's candidate matches, `majority_estimate`
-is `0` and the cascade contributes nothing — this degrades gracefully to
-CMS's plain `min`-across-rows behavior for that row. Note this means the
-cascade is inherently a no-op at `depth == 1`; the forced-collision unit
-test (see Testing Strategy) must use `depth >= 2` via `with_dimensions` to
-actually exercise it.
+This relies on the single-counter Misra-Gries guarantee: for a stream of
+`raw_total` inserts into one cell, the surviving candidate's `vote_margin`
+always satisfies `vote_margin <= true_count(candidate)` — not just when the
+candidate is a true majority, but for *any* insert sequence. That means
+`raw_total - vote_margin` is always a valid upper bound on the combined
+count of everything in the cell that isn't the candidate, including any one
+minority item. No lookup outside the single cell being read is needed, so
+this stays exactly `O(depth)` per operation, matching every other sketch in
+this project. It also does away with two complications the earlier,
+cross-row version required: there is no "exclude row r itself" edge case
+(nothing is being searched across rows), and the mechanism is meaningful
+even at `depth == 1` (no minimum-depth requirement to exercise it).
 
 `top_k` reuses the same per-insert estimate and heap-update pattern already
 used by `CountMinSketch`/`HeavyKeeper`.
@@ -200,21 +202,25 @@ used by `CountMinSketch`/`HeavyKeeper`.
 ### Property change: the never-undercount guarantee does not hold
 
 CMS never undercounts — its counters only grow, so `min`-across-rows is
-always ≥ the true count. PeelSketch's subtraction step breaks this outright:
-over-estimating a blocking candidate's count and subtracting too much can
-push a residual estimate *below* the true count. This is a real, deliberate
-departure from every Phase 1 baseline, not an oversight, and must be stated
-plainly rather than discovered during review.
+always ≥ the true count. PeelSketch's `raw_total - vote_margin` residual
+breaks this outright: for a minority item, the true count could be
+anywhere from `0` up to that upper bound, so the estimate can legitimately
+sit below the true count. This is a real, deliberate departure from every
+Phase 1 baseline, not an oversight, and must be stated plainly rather than
+discovered during review.
 
-The one structural guarantee PeelSketch *does* retain is Boyer-Moore's
-classical majority theorem: if a single fingerprint accounts for a true
-majority of a cell's inserts, it is provably the cell's final
-`candidate_fingerprint`. That is a correctness property about the internal
-mechanism, not an accuracy bound on estimates, and is worth its own test
-(see Testing Strategy). Whether the trade — a clean worst-case bound for
-better typical-case accuracy — actually pays off is an empirical question,
-directly measurable via `SweepResult`'s existing `underestimate_count` /
-`overestimate_count` columns.
+The guarantee PeelSketch *does* retain, and the one its estimator actually
+depends on, is the general single-counter Misra-Gries bound: for **any**
+insert sequence into a cell — not only ones with a true majority —
+`vote_margin <= true_count(candidate_fingerprint)` always holds. (The
+classical "a true majority survives as final candidate" theorem is a
+narrower corollary of this same guarantee, for the specific case where one
+item accounts for more than half the cell's inserts.) That is a correctness
+property about the internal mechanism, not an accuracy bound on final
+estimates, and is worth its own test (see Testing Strategy). Whether the
+trade — a clean worst-case bound for better typical-case accuracy — actually
+pays off is an empirical question, directly measurable via `SweepResult`'s
+existing `underestimate_count` / `overestimate_count` columns.
 
 ## Fallback Plan
 
@@ -245,16 +251,20 @@ already established by CMS/HeavyKeeper's test suites:
 2. **Memory-budget reservation-ordering test** — same pattern as
    CMS/HeavyKeeper's `memory_bytes_reserves_heap_budget_before_sizing_*`
    tests, adapted for the 12-byte `Cell`.
-3. **Forced-collision cascade test** — using `with_dimensions` to build a
-   deliberately tiny sketch (`depth >= 2` — the cascade is a no-op at
-   depth 1, see Query above — with `width = 1`) where two known items are
-   guaranteed to collide, asserting the cascade's subtracted residual
-   behaves sanely for the minority item.
-4. **Boyer-Moore majority-theorem property test** (`proptest`, already a
-   dev-dependency) — for arbitrary insert sequences into a single cell, if
-   one fingerprint accounts for a true majority of inserts, it must end as
-   `candidate_fingerprint`. This replaces the CMS-style never-undercounts
-   invariant, which PeelSketch does not honestly satisfy.
+3. **Forced-collision residual test** — using `with_dimensions` to build a
+   deliberately tiny sketch (`depth = 1`, `width = 1` is sufficient, since
+   the corrected mechanism needs no cross-row lookup) where two known items
+   are guaranteed to collide, asserting the minority item's
+   `raw_total - vote_margin` residual behaves sanely (bounded, non-negative,
+   and tighter than the raw, unfiltered `raw_total` CMS would report).
+4. **Misra-Gries lower-bound property test** (`proptest`, already a
+   dev-dependency) — for arbitrary insert sequences into a single cell,
+   `vote_margin` must never exceed the true count of whichever fingerprint
+   ends up as `candidate_fingerprint` (computed independently in the test by
+   directly counting matching fingerprints in the input sequence). This is
+   the general guarantee the estimator relies on, not just the majority-only
+   special case, and it replaces the CMS-style never-undercounts invariant,
+   which PeelSketch does not honestly satisfy.
 5. **Structural fuzzing** (`proptest`) — `raw_total` only grows,
    `vote_margin` never goes negative, `candidate_fingerprint` is always a
    fingerprint that was actually inserted into that cell. Accuracy against
