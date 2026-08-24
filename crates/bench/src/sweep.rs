@@ -117,8 +117,9 @@ fn build_row<S: HeavyHitterSketch>(
 
     SweepResult {
         run_id: format!(
-            "{}-card{}-skew{}-mem{}-trial{}",
+            "{}-{}-card{}-skew{}-mem{}-trial{}",
             algorithm.name(),
+            ctx.args.workload.name(),
             ctx.cardinality,
             ctx.skew,
             requested_memory_bytes,
@@ -160,11 +161,14 @@ pub fn run_sweep(args: &SweepArgs) -> Vec<SweepResult> {
             // and every algorithm/budget/trial run below, per the Global
             // Constraints note on stream reuse.
             let shared_seed = stream_seed(args.seed, cardinality, skew);
-            // `skew` only shapes Zipfian streams; PlateauGenerator ignores it
-            // entirely (see cli.rs's Workload doc and the design's Non-Goals on
-            // conditional CLI validation) — it is still looped over here so every
-            // requested skew value still produces its own row, even though the
-            // resulting stream is identical across skew values for plateau runs.
+            // `skew` only shapes Zipfian streams; PlateauGenerator ignores it entirely
+            // (see the design spec's Non-Goals on conditional CLI validation) — it is
+            // still looped over here so every requested skew value still produces its
+            // own row. Note the resulting streams are only statistically equivalent
+            // across skew values for plateau runs, not byte-identical: `shared_seed`
+            // above folds `skew` into itself before this match, so each skew value
+            // still gets its own seed even though PlateauGenerator never reads `skew`
+            // directly.
             let stream = match args.workload {
                 Workload::Zipfian => {
                     let stream_gen = ZipfianGenerator::new(cardinality, skew, shared_seed);

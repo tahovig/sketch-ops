@@ -184,4 +184,34 @@ mod tests {
     fn negative_heavy_jitter_panics() {
         PlateauGenerator::new(1000, 10, -0.1, 0.8, 1);
     }
+
+    #[test]
+    fn heavy_jitter_increases_spread_between_heavy_item_counts() {
+        let cardinality = 1000u64;
+        let num_heavy = 10u64;
+        let stream_length = 50_000usize;
+        let seed = 77u64;
+
+        let spread_ratio = |jitter: f64| -> f64 {
+            let gen = PlateauGenerator::new(cardinality, num_heavy, jitter, 0.8, seed);
+            let stream = gen.generate(stream_length);
+            let mut exact = ExactCounter::new();
+            for &item in &stream {
+                exact.insert(item);
+            }
+            let counts: Vec<u64> = (1..=num_heavy).map(rank_to_key).map(|k| exact.query(k)).collect();
+            let max = *counts.iter().max().unwrap() as f64;
+            let min = *counts.iter().min().unwrap() as f64;
+            max / min
+        };
+
+        let tied_ratio = spread_ratio(0.0);
+        let jittered_ratio = spread_ratio(0.9);
+
+        assert!(tied_ratio < 1.3, "zero jitter should produce near-tied counts: ratio={tied_ratio}");
+        assert!(
+            jittered_ratio > tied_ratio * 1.5,
+            "high jitter should produce materially more spread than zero jitter: tied={tied_ratio} jittered={jittered_ratio}"
+        );
+    }
 }
