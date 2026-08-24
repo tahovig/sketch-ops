@@ -111,13 +111,28 @@ impl PlateauGenerator {
 ```
 
 Mirrors `ZipfianGenerator`'s public shape exactly (`generate_ranks` +
-`generate`, same `rank_to_key` mapping, same `StdRng::seed_from_u64`
-convention) so both generators are interchangeable from the sweep loop's
+`generate`, same `rank_to_key` mapping, same fresh-RNG-seeded-per-call
+determinism) so both generators are interchangeable from the sweep loop's
 point of view and both produce keys in the same semantic space.
+
+**Implementation note (settled during planning):** unlike
+`ZipfianGenerator`, which genuinely needs `rand_distr::Zipf`'s distribution
+machinery, `PlateauGenerator` only needs a coin flip, a uniform integer
+pick, and a small weighted choice among `num_heavy` items — all cheaply
+hand-rollable. It uses the project's existing `sketches::hash::SplitMix64`
+(already proven in `HeavyKeeper`'s decay logic, and already a transitive
+dependency of `workload` via `sketches`) rather than `rand`/`StdRng`. This
+avoids depending on `rand` 0.10's exact `Rng` trait method surface and
+keeps this generator's randomness as auditable as everything else hashing-
+or PRNG-related in this project.
 
 **Parameters:**
 - `num_heavy` (H): count of near-tied heavy items, occupying ranks
-  `1..=H`. Must satisfy `num_heavy < cardinality`, **unless**
+  `1..=H`. Must be at least 1 (settled during planning — a "plateau" of
+  zero heavy items with nonzero `heavy_mass_fraction` is the same kind of
+  contradiction as the tail case below, and is rejected the same way, via
+  a constructor panic). Must also satisfy `num_heavy < cardinality`,
+  **unless**
   `heavy_mass_fraction == 1.0`, in which case `num_heavy == cardinality`
   is allowed (no tail exists, but none is needed either, since all mass
   goes to the heavy pool). The strict-less-than requirement otherwise
@@ -139,7 +154,7 @@ point of view and both produce keys in the same semantic space.
   uniformly across the `cardinality - num_heavy` tail items.
 
 **Generation (per call to `generate_ranks`, two phases):**
-1. Seed a fresh `StdRng` from `self.seed` (matching `ZipfianGenerator`'s
+1. Seed a fresh `SplitMix64` from `self.seed` (matching `ZipfianGenerator`'s
    own stateless, recompute-per-call pattern — no jitter state is stored
    on the struct). Draw the H heavy items' jitter values `u_1..u_H`
    (uniform `[-1.0, 1.0]`) from this RNG *first*, before generating any
