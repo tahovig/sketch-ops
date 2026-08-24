@@ -26,6 +26,10 @@ pub struct SweepResult {
     pub max_relative_error: f64,
     pub underestimate_count: u64,
     pub overestimate_count: u64,
+    pub workload: String,
+    pub num_heavy: u64,
+    pub heavy_jitter: f64,
+    pub heavy_mass_fraction: f64,
 }
 
 pub fn write_csv(path: &Path, rows: &[SweepResult]) -> io::Result<()> {
@@ -70,6 +74,10 @@ mod tests {
             max_relative_error: 0.11,
             underestimate_count: 3,
             overestimate_count: 5,
+            workload: "zipfian".to_string(),
+            num_heavy: 20,
+            heavy_jitter: 0.1,
+            heavy_mass_fraction: 0.8,
         }
     }
 

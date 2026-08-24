@@ -6,9 +6,10 @@ use sketches::peel_sketch::PeelSketch;
 use sketches::space_saving::SpaceSaving;
 use sketches::traits::HeavyHitterSketch;
 use workload::ground_truth::GroundTruth;
+use workload::plateau::PlateauGenerator;
 use workload::zipfian::ZipfianGenerator;
 
-use crate::cli::SweepArgs;
+use crate::cli::{SweepArgs, Workload};
 use crate::metrics::{f1_score, precision_at_k, recall_at_k, relative_error_stats};
 use crate::report::SweepResult;
 
@@ -116,8 +117,9 @@ fn build_row<S: HeavyHitterSketch>(
 
     SweepResult {
         run_id: format!(
-            "{}-card{}-skew{}-mem{}-trial{}",
+            "{}-{}-card{}-skew{}-mem{}-trial{}",
             algorithm.name(),
+            ctx.args.workload.name(),
             ctx.cardinality,
             ctx.skew,
             requested_memory_bytes,
@@ -143,6 +145,10 @@ fn build_row<S: HeavyHitterSketch>(
         max_relative_error: error_stats.max_relative_error,
         underestimate_count: error_stats.underestimate_count,
         overestimate_count: error_stats.overestimate_count,
+        workload: ctx.args.workload.name().to_string(),
+        num_heavy: ctx.args.num_heavy,
+        heavy_jitter: ctx.args.heavy_jitter,
+        heavy_mass_fraction: ctx.args.heavy_mass_fraction,
     }
 }
 
@@ -155,8 +161,30 @@ pub fn run_sweep(args: &SweepArgs) -> Vec<SweepResult> {
             // and every algorithm/budget/trial run below, per the Global
             // Constraints note on stream reuse.
             let shared_seed = stream_seed(args.seed, cardinality, skew);
-            let stream_gen = ZipfianGenerator::new(cardinality, skew, shared_seed);
-            let stream = stream_gen.generate(args.stream_length as usize);
+            // `skew` only shapes Zipfian streams; PlateauGenerator ignores it entirely
+            // (see the design spec's Non-Goals on conditional CLI validation) — it is
+            // still looped over here so every requested skew value still produces its
+            // own row. Note the resulting streams are only statistically equivalent
+            // across skew values for plateau runs, not byte-identical: `shared_seed`
+            // above folds `skew` into itself before this match, so each skew value
+            // still gets its own seed even though PlateauGenerator never reads `skew`
+            // directly.
+            let stream = match args.workload {
+                Workload::Zipfian => {
+                    let stream_gen = ZipfianGenerator::new(cardinality, skew, shared_seed);
+                    stream_gen.generate(args.stream_length as usize)
+                }
+                Workload::Plateau => {
+                    let stream_gen = PlateauGenerator::new(
+                        cardinality,
+                        args.num_heavy,
+                        args.heavy_jitter,
+                        args.heavy_mass_fraction,
+                        shared_seed,
+                    );
+                    stream_gen.generate(args.stream_length as usize)
+                }
+            };
 
             let ground_truth = GroundTruth::from_stream(&stream);
             let true_top_k = ground_truth.top_k(args.top_k);
@@ -226,6 +254,65 @@ mod tests {
             warmup_fraction: 0.1,
             output: "results/tiny.csv".to_string(),
             format: "csv".to_string(),
+            workload: Workload::Zipfian,
+            num_heavy: 20,
+            heavy_jitter: 0.1,
+            heavy_mass_fraction: 0.8,
+        }
+    }
+
+    fn tiny_plateau_args() -> SweepArgs {
+        SweepArgs {
+            cardinality: vec![200],
+            stream_length: 5_000,
+            skew: vec![1.0],
+            memory_budgets: vec![4096, 16384],
+            top_k: 10,
+            trials: 2,
+            seed: 42,
+            warmup_fraction: 0.1,
+            output: "results/tiny_plateau.csv".to_string(),
+            format: "csv".to_string(),
+            workload: Workload::Plateau,
+            num_heavy: 10,
+            heavy_jitter: 0.1,
+            heavy_mass_fraction: 0.8,
+        }
+    }
+
+    #[test]
+    fn tiny_plateau_sweep_produces_expected_row_count_and_sane_values() {
+        let args = tiny_plateau_args();
+        let results = run_sweep(&args);
+
+        let expected_rows =
+            args.cardinality.len() * args.skew.len() * args.memory_budgets.len() * 4 * args.trials as usize;
+        assert_eq!(results.len(), expected_rows);
+
+        for row in &results {
+            assert_eq!(row.workload, "plateau");
+            assert_eq!(row.num_heavy, 10);
+            assert!(row.items_per_sec > 0.0, "throughput must be positive: {row:?}");
+            assert!(row.actual_memory_bytes > 0);
+            assert!((0.0..=1.0).contains(&row.precision_at_k));
+            assert!((0.0..=1.0).contains(&row.recall_at_k));
+            assert!((0.0..=1.0).contains(&row.f1_at_k));
+            assert!(row.mean_relative_error >= 0.0);
+            assert!(row.max_relative_error >= row.mean_relative_error - 1e-9);
+        }
+
+        // Same oracle reasoning as the Zipfian tiny-sweep test: at budget
+        // 16384 with top_k 10, Space-Saving's m (507) exceeds this stream's
+        // cardinality (200) regardless of which generator produced it, so
+        // Space-Saving must be exact here too.
+        let exact_space_saving_rows: Vec<_> = results
+            .iter()
+            .filter(|row| row.algorithm == "space_saving" && row.requested_memory_bytes == 16384)
+            .collect();
+        assert!(!exact_space_saving_rows.is_empty());
+        for row in exact_space_saving_rows {
+            assert_eq!(row.mean_relative_error, 0.0, "expected exact tracking: {row:?}");
+            assert_eq!(row.f1_at_k, 1.0, "expected perfect top-k recovery: {row:?}");
         }
     }
 

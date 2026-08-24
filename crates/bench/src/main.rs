@@ -27,6 +27,35 @@ fn main() {
                 std::process::exit(1);
             }
 
+            if args.workload == cli::Workload::Plateau {
+                if !(0.0..1.0).contains(&args.heavy_jitter) {
+                    eprintln!("error: --heavy-jitter must be in [0.0, 1.0), got {}", args.heavy_jitter);
+                    std::process::exit(1);
+                }
+                if !(args.heavy_mass_fraction > 0.0 && args.heavy_mass_fraction <= 1.0) {
+                    eprintln!(
+                        "error: --heavy-mass-fraction must be in (0.0, 1.0], got {}",
+                        args.heavy_mass_fraction
+                    );
+                    std::process::exit(1);
+                }
+                if args.num_heavy < 1 {
+                    eprintln!("error: --num-heavy must be at least 1, got {}", args.num_heavy);
+                    std::process::exit(1);
+                }
+                for &cardinality in &args.cardinality {
+                    if !(args.num_heavy < cardinality
+                        || (args.num_heavy == cardinality && args.heavy_mass_fraction == 1.0))
+                    {
+                        eprintln!(
+                            "error: --num-heavy ({}) must be < --cardinality ({}) for a plateau sweep, unless --heavy-mass-fraction is exactly 1.0",
+                            args.num_heavy, cardinality
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            }
+
             let results = sweep::run_sweep(&args);
 
             let output_path = std::path::Path::new(&args.output);
