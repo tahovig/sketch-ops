@@ -12,6 +12,12 @@ pub enum Command {
     Sweep(SweepArgs),
 }
 
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Workload {
+    Zipfian,
+    Plateau,
+}
+
 #[derive(Args, Debug, Clone)]
 pub struct SweepArgs {
     #[arg(long, value_delimiter = ',', required = true)]
@@ -43,6 +49,27 @@ pub struct SweepArgs {
 
     #[arg(long, default_value = "csv")]
     pub format: String,
+
+    #[arg(long, value_enum, default_value = "zipfian")]
+    pub workload: Workload,
+
+    #[arg(long, default_value_t = 20)]
+    pub num_heavy: u64,
+
+    #[arg(long, default_value_t = 0.1)]
+    pub heavy_jitter: f64,
+
+    #[arg(long, default_value_t = 0.8)]
+    pub heavy_mass_fraction: f64,
+}
+
+impl Workload {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Workload::Zipfian => "zipfian",
+            Workload::Plateau => "plateau",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -79,6 +106,36 @@ mod tests {
         assert_eq!(args.output, "results/test.csv");
         assert_eq!(args.warmup_fraction, 0.05);
         assert_eq!(args.format, "csv");
+        assert_eq!(args.workload, Workload::Zipfian, "workload should default to zipfian when omitted");
+        assert_eq!(args.num_heavy, 20, "num_heavy should default to 20 when omitted");
+        assert_eq!(args.heavy_jitter, 0.1, "heavy_jitter should default to 0.1 when omitted");
+        assert_eq!(args.heavy_mass_fraction, 0.8, "heavy_mass_fraction should default to 0.8 when omitted");
+    }
+
+    #[test]
+    fn parses_plateau_workload_flags() {
+        let cli = Cli::parse_from([
+            "bench",
+            "sweep",
+            "--cardinality", "1000",
+            "--stream-length", "50000",
+            "--skew", "1.0",
+            "--memory-budgets", "4096",
+            "--workload", "plateau",
+            "--num-heavy", "15",
+            "--heavy-jitter", "0.2",
+            "--heavy-mass-fraction", "0.9",
+            "--output", "results/test.csv",
+        ]);
+
+        let args = match cli.command {
+            Command::Sweep(args) => args,
+        };
+
+        assert_eq!(args.workload, Workload::Plateau);
+        assert_eq!(args.num_heavy, 15);
+        assert_eq!(args.heavy_jitter, 0.2);
+        assert_eq!(args.heavy_mass_fraction, 0.9);
     }
 
     #[test]
