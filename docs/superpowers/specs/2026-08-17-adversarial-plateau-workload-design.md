@@ -139,8 +139,12 @@ or PRNG-related in this project.
   exists because `num_heavy == cardinality` with `heavy_mass_fraction <
   1.0` is a contradiction — the tail-pool branch would need to sample
   from zero remaining ranks. Violating either condition panics via
-  `.expect()` with a clear message, mirroring `ZipfianGenerator::
-  generate_ranks`'s own `.expect("valid zipf parameters...")` guard.
+  `assert!` in the constructor, with a message naming the violated
+  parameter — validated eagerly at construction time rather than lazily
+  in `generate_ranks`, unlike `ZipfianGenerator::generate_ranks`'s own
+  `.expect("valid zipf parameters...")` guard (which validates at
+  generation time since it delegates to `rand_distr::Zipf::new`'s own
+  `Result`).
 - `heavy_jitter`: fractional variation around an equal split among the H
   heavy items, in `[0.0, 1.0)`. `0.0` means perfectly tied; values
   approaching `1.0` mean wide variation. Deliberately non-zero by default
