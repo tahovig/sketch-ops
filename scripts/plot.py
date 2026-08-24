@@ -14,7 +14,8 @@ REQUIRED_COLUMNS = {
     "actual_memory_bytes", "construction_time_ns", "insert_elapsed_ns",
     "items_per_sec", "precision_at_k", "recall_at_k", "f1_at_k",
     "mean_relative_error", "max_relative_error", "underestimate_count",
-    "overestimate_count"
+    "overestimate_count", "workload", "num_heavy", "heavy_jitter",
+    "heavy_mass_fraction"
 }
 
 
@@ -31,6 +32,21 @@ def validate_columns(df: pd.DataFrame, csv_path: str) -> None:
     missing = REQUIRED_COLUMNS - set(df.columns)
     if missing:
         sys.exit(f"error: CSV file {csv_path} is missing columns: {sorted(missing)}")
+
+
+def filter_workload(df: pd.DataFrame, workload: str, csv_path: str) -> pd.DataFrame:
+    present = sorted(df["workload"].unique())
+    if workload is not None:
+        filtered = df[df["workload"] == workload]
+        if filtered.empty:
+            sys.exit(f"error: no rows with workload={workload!r} found in {csv_path} (present: {present})")
+        return filtered
+    if len(present) > 1:
+        sys.exit(
+            f"error: {csv_path} contains multiple workload types {present} — "
+            "pass --workload to select one, plotting a mix would be misleading"
+        )
+    return df
 
 
 def plot_accuracy_vs_memory(df: pd.DataFrame, out_dir: str) -> None:
@@ -84,11 +100,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Plot heavy-hitters sweep results.")
     parser.add_argument("csv_path", help="Path to a sweep-results CSV file")
     parser.add_argument("--out", default="charts", help="Output directory for PNG charts")
+    parser.add_argument(
+        "--workload",
+        choices=["zipfian", "plateau"],
+        default=None,
+        help="Filter to one workload type. Required if the CSV contains more than one.",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
     df = load_results(args.csv_path)
     validate_columns(df, args.csv_path)
+    df = filter_workload(df, args.workload, args.csv_path)
 
     plot_accuracy_vs_memory(df, args.out)
     plot_throughput_vs_memory(df, args.out)
